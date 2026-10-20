@@ -1,0 +1,25 @@
+[Unit]
+Description=Lightweight Kubernetes
+Documentation=https://k3s.io
+Requires=firewalld.service k3s-preflight.service
+BindsTo=firewalld.service
+After=network-online.target firewalld.service k3s-preflight.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/k3s server
+KillMode=process
+Delegate=yes
+# These weights only deprioritize the k3s service. Kubelet enforces pod bounds.
+CPUWeight=50
+IOWeight=50
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

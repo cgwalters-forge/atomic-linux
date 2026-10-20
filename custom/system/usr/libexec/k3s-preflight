@@ -1,0 +1,52 @@
+#!/usr/bin/bash
+
+set -euo pipefail
+
+fail() {
+    printf 'k3s preflight failed: %s\n' "$*" >&2
+    exit 1
+}
+
+test -f /sys/fs/cgroup/cgroup.controllers || fail 'cgroup v2 is required'
+
+MODULES_CONF=/usr/lib/k3s-host/modules.conf
+
+while read -r module; do
+    test -d "/sys/module/${module}" || fail "required kernel module is not loaded: ${module}"
+done < <(grep -Ev '^[[:space:]]*(#|$)' "${MODULES_CONF}")
+
+# KubeVirt hosts set K3S_PREFLIGHT_REQUIRE_KVM=1 in /etc/default/k3s-preflight.
+if [[ "${K3S_PREFLIGHT_REQUIRE_KVM:-0}" == 1 ]]; then
+    if ! test -r /dev/kvm || ! test -w /dev/kvm; then
+        fail '/dev/kvm is not accessible'
+    fi
+    grep -Eq '(^|[[:space:]])(vmx|svm)([[:space:]]|$)' /proc/cpuinfo ||
+        fail 'hardware virtualization is not exposed; enable nested virtualization in the outer hypervisor'
+fi
+
+if ! ip -j -4 route show table all | python3 -c '
+import ipaddress
+import json
+import sys
+
+reserved = [ipaddress.ip_network("10.42.0.0/16"), ipaddress.ip_network("10.43.0.0/16")]
+managed_devices = {"cni0", "flannel.1"}
+for route in json.load(sys.stdin):
+    destination = route.get("dst")
+    if not destination or destination == "default":
+        continue
+    try:
+        network = ipaddress.ip_network(destination, strict=False)
+    except ValueError:
+        print(f"cannot parse route destination {destination!r}", file=sys.stderr)
+        sys.exit(1)
+    for candidate in reserved:
+        if not network.overlaps(candidate):
+            continue
+        if route.get("dev") in managed_devices and network.subnet_of(candidate):
+            break
+        print(f"route {destination} conflicts with a configured k3s CIDR", file=sys.stderr)
+        sys.exit(1)
+'; then
+    fail 'change the conflicting route or choose non-overlapping cluster and service CIDRs before starting k3s'
+fi

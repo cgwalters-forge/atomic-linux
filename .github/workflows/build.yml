@@ -1,0 +1,87 @@
+name: build
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_REGISTRY: ghcr.io/cgwalters-forge
+  IMAGE_NAME: atomic-linux
+  IMAGE_VENDOR: cgwalters-forge
+  DEFAULT_TAG: stable
+
+jobs:
+  # The shared workflow check: actionlint, zizmor and the runner-label policy.
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cgwalters-forge/actions/lint@main
+      - run: shellcheck build/*.sh custom/system/usr/libexec/k3s-* tests/kubevirt/*.sh
+
+  # Pull requests build and lint the image (the Containerfile ends with
+  # `bootc container lint`) and never push. Pushes to main also publish.
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Frees disk, puts rootful podman storage on a btrfs loopback and
+      # installs a current podman and just (the image is several GB).
+      - uses: projectbluefin/actions/bootc-build/setup-runner@eb4c546389f19ad9e42f1af052623de73c620ebb # v1
+        with:
+          storage-backend: btrfs
+          native-overlay: "true"
+          update-podman: "true"
+          install-tools: '["just"]'
+
+      - name: Build
+        run: sudo -E "$(command -v just)" build "${DEFAULT_TAG}"
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          local_ref="localhost/${IMAGE_NAME}:${DEFAULT_TAG}"
+          version=$(sudo podman image inspect "${local_ref}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
+          remote="${IMAGE_REGISTRY}/${IMAGE_NAME}"
+          printf '%s' "${REGISTRY_TOKEN}" | sudo podman login ghcr.io --username "${ACTOR}" --password-stdin
+          sudo podman push --digestfile digest "${local_ref}" "docker://${remote}:${version}"
+          for tag in "${DEFAULT_TAG}" "git-${GITHUB_SHA::12}"; do
+            sudo skopeo copy --all --preserve-digests "docker://${remote}@$(cat digest)" "docker://${remote}:${tag}"
+          done
+          sudo podman logout ghcr.io
+          {
+            echo "## ${remote}"
+            echo
+            echo "Digest: \`$(cat digest)\`"
+            echo "Tags: \`${version}\`, \`${DEFAULT_TAG}\`, \`git-${GITHUB_SHA::12}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # TODO: sign the pushed digest with a cosign key pair (not keyless:
+      # containers/image policy can only match keyless signatures by subject
+      # email, not by workflow identity, so bootc cannot enforce them). Sign
+      # with a pinned cosign v3 and `--new-bundle-format=false
+      # --use-signing-config=false`, since containers/image reads only the
+      # legacy .sig tag, and ship policy.json, registries.d and the public
+      # keys so a derived image can opt in to enforcement.

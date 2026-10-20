@@ -1,0 +1,4 @@
+# Only build/ and custom/ are copied into the build context stage.
+*
+!build/
+!custom/

@@ -1,0 +1,15 @@
+[Unit]
+Description=Validate k3s host prerequisites
+DefaultDependencies=no
+Wants=network-online.target
+After=systemd-modules-load.service local-fs.target network-online.target
+Before=k3s.service
+
+[Service]
+Type=oneshot
+# Optional host policy, e.g. K3S_PREFLIGHT_REQUIRE_KVM=1 for KubeVirt hosts.
+EnvironmentFile=-/etc/default/k3s-preflight
+ExecStartPre=/usr/lib/systemd/systemd-modules-load /usr/lib/k3s-host/modules.conf
+ExecStartPre=/usr/lib/systemd/systemd-sysctl /usr/lib/k3s-host/sysctl.conf
+ExecStart=/usr/libexec/k3s-preflight
+RemainAfterExit=yes

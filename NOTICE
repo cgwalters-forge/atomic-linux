@@ -1,0 +1,15 @@
+atomic-linux
+Copyright the atomic-linux contributors.
+
+This repository is derived from the Universal Blue finpilot image template
+(https://github.com/projectbluefin/finpilot), Copyright the Universal Blue
+and Project Bluefin contributors, licensed under the Apache License 2.0.
+The build layout, build/00-image-info.sh, build/10-build.sh,
+build/clean-stage.sh, build/copr-helpers.sh, the build/*.example scripts and
+the custom/brew, custom/flatpaks and custom/ujust examples come from it,
+modified here.
+
+The image is built from Fedora's Silverblue image
+(quay.io/fedora-ostree-desktops/silverblue) and the
+ghcr.io/projectbluefin/common and ghcr.io/ublue-os/brew context images, each
+under its own licenses.

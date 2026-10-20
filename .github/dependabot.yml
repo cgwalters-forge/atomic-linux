@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Bumps the digest-pinned FROM lines in the Containerfile. Skip releases
+  # younger than the cooldown, so a quickly yanked bad push is never proposed.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

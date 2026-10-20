@@ -1,0 +1,34 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: kubevirt-acceptance
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: kubevirt-acceptance
+    spec:
+      domain:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        devices:
+          interfaces:
+          - name: default
+            masquerade: {}
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: disk
+        containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo@sha256:4a0c3f9526551d0294079f1b0171a071a57fe0bf60a2e8529bf4102ee63a67cd
+      - name: cloudinit
+        cloudInitNoCloud:
+          secretRef:
+            name: kubevirt-acceptance-ssh

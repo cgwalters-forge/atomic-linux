@@ -1,0 +1,174 @@
+#!/usr/bin/bash
+# Bounded acceptance check for the image's k3s host setup, run as root on a
+# test VM with k3s enabled. It restarts firewalld and k3s and runs two short
+# pods, so do not run it on a production node.
+#
+# Optional thresholds for images that configure kubelet reservations:
+#   K3S_VALIDATE_MIN_RESERVED_CPU_MILLI, K3S_VALIDATE_MIN_RESERVED_MEMORY_GIB
+# K3S_VALIDATE_REQUIRE_KVM=1 also checks /dev/kvm and VMX/SVM.
+
+set -euo pipefail
+
+K3S_VERSION='v1.36.4+k3s1'
+
+wait_for_node() {
+    for attempt in $(seq 1 90); do
+        if k3s kubectl wait --for=condition=Ready node --all --timeout=5s >/dev/null 2>&1; then
+            return 0
+        fi
+        test "${attempt}" -lt 90 || return 1
+        sleep 2
+    done
+}
+
+wait_for_coredns() {
+    for attempt in $(seq 1 90); do
+        if test "$(k3s kubectl -n kube-system get deployment coredns -o jsonpath='{.status.availableReplicas}' 2>/dev/null)" = 1; then
+            return 0
+        fi
+        test "${attempt}" -lt 90 || return 1
+        sleep 2
+    done
+}
+
+systemctl is-active --quiet k3s.service
+systemctl is-active --quiet firewalld.service
+systemctl is-active --quiet gdm.service
+systemctl is-active --quiet NetworkManager.service
+test -f /sys/fs/cgroup/cgroup.controllers
+if [[ "${K3S_VALIDATE_REQUIRE_KVM:-0}" == 1 ]]; then
+    test -r /dev/kvm && test -w /dev/kvm
+    grep -Eq '(^|[[:space:]])(vmx|svm)([[:space:]]|$)' /proc/cpuinfo
+fi
+test "$(getenforce)" = Enforcing
+
+wait_for_node
+
+for attempt in $(seq 1 90); do
+    if k3s kubectl get serviceaccount default >/dev/null 2>&1; then
+        break
+    fi
+    test "${attempt}" -lt 90 || exit 1
+    sleep 2
+done
+
+wait_for_coredns
+
+# The same preflight must pass after k3s creates cni0 and flannel.1 routes.
+/usr/libexec/k3s-preflight
+systemctl stop firewalld.service
+for attempt in $(seq 1 15); do
+    if ! systemctl is-active --quiet k3s.service; then
+        break
+    fi
+    test "${attempt}" -lt 15 || exit 1
+    sleep 1
+done
+systemctl start firewalld.service
+systemctl restart k3s.service
+wait_for_node
+wait_for_coredns
+
+k3s --version | grep -Fq "${K3S_VERSION}"
+if k3s kubectl -n kube-system get deployment traefik >/dev/null 2>&1; then
+    printf 'Traefik must be disabled\n' >&2
+    exit 1
+fi
+if k3s kubectl -n kube-system get daemonset -l app=svclb -o name | grep -q .; then
+    printf 'ServiceLB must be disabled\n' >&2
+    exit 1
+fi
+
+k3s kubectl get node -o json | python3 -c '
+import json
+import os
+import sys
+
+node = json.load(sys.stdin)["items"][0]
+capacity = node["status"]["capacity"]
+allocatable = node["status"]["allocatable"]
+
+def cpu(value):
+    return int(value[:-1]) if value.endswith("m") else int(value) * 1000
+
+def memory(value):
+    units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3}
+    for suffix, multiplier in units.items():
+        if value.endswith(suffix):
+            return int(value[:-len(suffix)]) * multiplier
+    return int(value)
+
+min_cpu = int(os.environ.get("K3S_VALIDATE_MIN_RESERVED_CPU_MILLI", "0"))
+min_memory = int(os.environ.get("K3S_VALIDATE_MIN_RESERVED_MEMORY_GIB", "0")) * 1024**3
+if cpu(capacity["cpu"]) - cpu(allocatable["cpu"]) < min_cpu:
+    raise SystemExit(f"kubelet CPU reservations below {min_cpu}m are absent from node allocatable")
+if memory(capacity["memory"]) - memory(allocatable["memory"]) < min_memory:
+    raise SystemExit(f"kubelet memory reservations below {min_memory} bytes are absent from node allocatable")
+'
+
+pod_cgroup=/sys/fs/cgroup/kubepods.slice
+test -d "${pod_cgroup}"
+memory_max=$(<"${pod_cgroup}/memory.max")
+cpu_weight=$(<"${pod_cgroup}/cpu.weight")
+if [[ "${K3S_VALIDATE_MIN_RESERVED_MEMORY_GIB:-0}" != 0 ]]; then
+    test "${memory_max}" != max
+fi
+test "${cpu_weight}" -gt 1
+
+cleanup_pod() {
+    k3s kubectl delete pod "$1" --ignore-not-found --wait=true --timeout=90s >/dev/null 2>&1 || true
+}
+
+network_pod='k3s-network-check'
+resource_pod='k3s-resource-probe'
+cleanup_probes() {
+    cleanup_pod "${network_pod}"
+    cleanup_pod "${resource_pod}"
+}
+trap cleanup_probes EXIT
+cleanup_probes
+
+k3s kubectl run "${network_pod}" --restart=Never --image=docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0 -- \
+    sh -ceu 'nslookup kubernetes.default.svc.cluster.local && wget -q --spider https://example.com'
+for attempt in $(seq 1 90); do
+    phase=$(k3s kubectl get "pod/${network_pod}" -o jsonpath='{.status.phase}')
+    if test "${phase}" = Succeeded; then
+        break
+    fi
+    if test "${phase}" = Failed; then
+        k3s kubectl logs "${network_pod}" >&2 || true
+        exit 1
+    fi
+    test "${attempt}" -lt 90 || exit 1
+    sleep 2
+done
+k3s kubectl logs "${network_pod}" >/dev/null
+cleanup_pod "${network_pod}"
+
+k3s kubectl run "${resource_pod}" --restart=Never --image=docker.io/library/busybox@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0 -- \
+    sh -ceu 'trap "exit 0" TERM INT; sleep 300'
+container_id=''
+for attempt in $(seq 1 90); do
+    container_id=$(k3s crictl ps --name "${resource_pod}" -q)
+    if test -n "${container_id}"; then
+        break
+    fi
+    test "${attempt}" -lt 90 || exit 1
+    sleep 2
+done
+pid=$(k3s crictl inspect "${container_id}" | jq -er '.info.pid')
+grep -Fq 'kubepods.slice' "/proc/${pid}/cgroup"
+cleanup_pod "${resource_pod}"
+
+default_zone=''
+default_zone=$(firewall-cmd --get-default-zone)
+test "${default_zone}" != k3s
+for port in 6443/tcp 10250/tcp 8472/udp 30000-32767/tcp; do
+    if firewall-cmd --zone="${default_zone}" --query-port="${port}"; then
+        printf 'default LAN zone exposes %s\n' "${port}" >&2
+        exit 1
+    fi
+done
+firewall-cmd --zone=k3s --query-source=10.42.0.0/16
+firewall-cmd --zone=k3s --query-source=10.43.0.0/16
+grep -Fqx '  - nodeport-addresses=127.0.0.0/8' /etc/rancher/k3s/config.yaml

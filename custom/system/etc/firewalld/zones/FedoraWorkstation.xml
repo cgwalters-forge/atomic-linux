@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Fedora Workstation</short>
+  <description>Desktop LAN zone without the upstream broad high-port exposure.</description>
+  <service name="dhcpv6-client"/>
+  <service name="samba-client"/>
+  <service name="ssh"/>
+  <forward/>
+</zone>

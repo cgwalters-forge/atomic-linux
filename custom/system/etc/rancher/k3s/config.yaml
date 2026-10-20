@@ -1,0 +1,17 @@
+# Base k3s server configuration. Host-specific settings such as kubelet
+# reservations belong in a derived image's /etc/rancher/k3s/config.yaml.d/,
+# using `kubelet-arg+:` to append rather than replace.
+cluster-cidr: 10.42.0.0/16
+service-cidr: 10.43.0.0/16
+flannel-backend: vxlan
+selinux: true
+secrets-encryption: true
+write-kubeconfig-mode: "0600"
+disable:
+  - traefik
+  - servicelb
+kubelet-arg:
+  - enforce-node-allocatable=pods
+  - eviction-hard=memory.available<1Gi,nodefs.available<10%,imagefs.available<15%
+kube-proxy-arg:
+  - nodeport-addresses=127.0.0.0/8

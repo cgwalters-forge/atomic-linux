@@ -1,0 +1,7 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Our own actions follow @main; other actions must be pinned by commit.
+        "cgwalters-forge/*": ref-pin
+        "*": hash-pin
