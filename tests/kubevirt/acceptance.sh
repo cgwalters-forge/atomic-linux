@@ -12,14 +12,14 @@ readonly NAMESPACE='kubevirt-acceptance'
 readonly VM='kubevirt-acceptance'
 readonly KUBECTL=(k3s kubectl)
 readonly -A IMAGE_DIGESTS=(
-    [virt-operator]='sha256:d08b5b5ad1c0d694fad13279e44b44b6fad961aa7508acd53b87ce6ef468cbae'
-    [virt-api]='sha256:42341b1d52699f4bb87f3996151bafe2e3fe065e9146cc64a15959ddf7bf2c69'
-    [virt-controller]='sha256:7c6034ab39b97c0bb2b31bab2aaf576b616a3d6e59777002d63e2f2bf51e73c2'
-    [virt-handler]='sha256:df9f2069924a28ba76f47e7f4fbd9a0be3aa13cfa004a59e7a708bbff2a90424'
-    [virt-launcher]='sha256:f23102ca00bf12f7962021adfdfdad63c873b01a03001a6d20d5813950254b9c'
-    [virt-exportproxy]='sha256:042443b8f58246623e440af59cd34c0627f843b6094c41794d16c98c8d0049ea'
-    [virt-template-apiserver]='sha256:af326822d8907ce3c96a6458444f5af0f1e3f912215710eae3fa562c92a3470e'
-    [virt-template-controller]='sha256:2cd0770ce24b40d742bd6bac438c55c886352366c90e8165c11b715b7cfd94c7'
+    ['virt-operator']='sha256:d08b5b5ad1c0d694fad13279e44b44b6fad961aa7508acd53b87ce6ef468cbae'
+    ['virt-api']='sha256:42341b1d52699f4bb87f3996151bafe2e3fe065e9146cc64a15959ddf7bf2c69'
+    ['virt-controller']='sha256:7c6034ab39b97c0bb2b31bab2aaf576b616a3d6e59777002d63e2f2bf51e73c2'
+    ['virt-handler']='sha256:df9f2069924a28ba76f47e7f4fbd9a0be3aa13cfa004a59e7a708bbff2a90424'
+    ['virt-launcher']='sha256:f23102ca00bf12f7962021adfdfdad63c873b01a03001a6d20d5813950254b9c'
+    ['virt-exportproxy']='sha256:042443b8f58246623e440af59cd34c0627f843b6094c41794d16c98c8d0049ea'
+    ['virt-template-apiserver']='sha256:af326822d8907ce3c96a6458444f5af0f1e3f912215710eae3fa562c92a3470e'
+    ['virt-template-controller']='sha256:2cd0770ce24b40d742bd6bac438c55c886352366c90e8165c11b715b7cfd94c7'
 )
 readonly FEDORA_DISK='quay.io/kubevirt/fedora-cloud-container-disk-demo@sha256:4a0c3f9526551d0294079f1b0171a071a57fe0bf60a2e8529bf4102ee63a67cd'
 

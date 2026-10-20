@@ -54,7 +54,7 @@ build tag=DEFAULT_TAG:
 # ShellCheck over build scripts, host helpers and tests.
 [group('Quality')]
 lint:
-    shellcheck build/*.sh custom/system/usr/libexec/k3s-* tests/kubevirt/*.sh
+    shellcheck build/*.sh custom/system/usr/libexec/k3s-* tests/*.sh tests/kubevirt/*.sh
 
 # Containerfile lint (pulls the hadolint image).
 [group('Quality')]
@@ -76,10 +76,13 @@ lint-workflows:
 clean:
     rm -rf output
 
-# Stateless boot: networking, image identity and the default target.
+# Stateless boot: networking, identity, default target, k3s left disabled.
 [group('Virtual Machine')]
 ephemeral-smoke tag=DEFAULT_TAG:
-    {{ BCVK }} ephemeral run --execute "sh -ceu 'for i in \$(seq 1 60); do systemctl is-active --quiet NetworkManager && break; sleep 2; done; systemctl is-active NetworkManager; test \"\$(jq -r .\\\"image-name\\\" /usr/share/ublue-os/image-info.json)\" = {{ IMAGE_NAME }}; test \"\$(jq -r .\\\"image-tag\\\" /usr/share/ublue-os/image-info.json)\" = {{ tag }}; bootc status; test \"\$(systemctl get-default)\" = graphical.target; command -v tmux; command -v gum; command -v k3s; getent hosts fedoraproject.org; curl --fail --silent --show-error --head https://fedoraproject.org'" "{{ local_image }}:{{ tag }}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    script=$(base64 -w0 tests/ephemeral-smoke.sh)
+    {{ BCVK }} ephemeral run-ssh "{{ local_image }}:{{ tag }}" -- "echo ${script} | base64 -d | sudo env EXPECT_IMAGE_NAME={{ IMAGE_NAME }} EXPECT_TAG={{ tag }} bash"
 
 # Write a reusable QCOW2 disk from containers-storage.
 [group('Virtual Machine')]

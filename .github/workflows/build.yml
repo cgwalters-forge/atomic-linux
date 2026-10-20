@@ -28,7 +28,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: cgwalters-forge/actions/lint@main
-      - run: shellcheck build/*.sh custom/system/usr/libexec/k3s-* tests/kubevirt/*.sh
+      - run: shellcheck build/*.sh custom/system/usr/libexec/k3s-* tests/*.sh tests/kubevirt/*.sh
 
   # Pull requests build and lint the image (the Containerfile ends with
   # `bootc container lint`) and never push. Pushes to main also publish.
