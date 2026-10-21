@@ -28,7 +28,9 @@ rules come from [cgwalters-forge/agenthome](https://github.com/cgwalters-forge/a
 - `.github/workflows/build.yml`: lint, image build, VM tests (`vm-smoke`,
   `vm-k3s`) on PRs; on `main`, push as `git-<sha>` and promote that digest
   to `stable` once the VM tests pass.
-- `.github/workflows/composefs.yml`: builds the composefs variant, never pushes.
+- `.github/workflows/composefs.yml`: builds the composefs variant and boots
+  it in VMs (`vm-composefs-smoke`, `vm-composefs-lifecycle`); never pushes
+  and does not gate `stable`.
 
 ## Build, lint and test
 

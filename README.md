@@ -100,7 +100,9 @@ root and checks that the composefs backend is booted, that an `/etc` and a
 `/var` edit survive `bootc upgrade`, and that `bootc switch` and
 `bootc rollback` boot the expected images, with SELinux enforcing and the k3s
 preflight unit working. CI builds and lints the variant on every pull
-request and push to `main` but does not publish it.
+request and push to `main`, boots it with `bcvk ephemeral` and runs
+`composefs-vm-test`, but does not publish it, and these jobs do not gate
+`stable`.
 
 Known gaps, as of bootc 1.17.1 (October 2026):
 
