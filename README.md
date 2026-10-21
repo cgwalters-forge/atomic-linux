@@ -72,6 +72,56 @@ A derived image that installs packages should run `dnf5 clean all` (or reuse
 this repository's `build/clean-stage.sh` pattern) so its own
 `bootc container lint` passes.
 
+## composefs backend (optional)
+
+bootc has two storage backends: ostree, the default here, and
+[composefs](https://bootc-dev.github.io/bootc/bootc-composefs.7.html), which
+bootc 1.17.0 declared stable. `just build-composefs` builds a
+composefs-native variant as `atomic-linux:composefs`: `build/15-bootc.sh`
+installs a newer bootc, ships `/usr/lib/composefs/setup-root-conf.toml`,
+removes ostree's `prepare-root.conf` and adds bootc's `51bootc` dracut module
+to the initramfs. `bootc install` (and so bcvk) then picks the composefs
+backend by itself, with GRUB and BLS entries; no `--composefs-backend` flag is
+needed. The root is a read-only, fs-verity-checked EROFS image, and `/etc` and
+`/var` are per-deployment and shared state directories under `/sysroot/state`.
+
+It needs bootc 1.17 or newer, which Fedora 44 has only in updates-testing so
+far; the build fails early with older bootc. `source=copr` takes upstream's
+main branch from the `rhcontainerbot/bootc` COPR instead:
+
+```sh
+just build-composefs                     # bootc from Fedora updates-testing
+just build-composefs composefs copr      # bootc from upstream main
+just composefs-vm-test                   # install, upgrade, switch, rollback
+```
+
+`composefs-vm-test` installs the build in a disposable libvirt VM on a btrfs
+root and checks that the composefs backend is booted, that an `/etc` and a
+`/var` edit survive `bootc upgrade`, and that `bootc switch` and
+`bootc rollback` boot the expected images, with SELinux enforcing and the k3s
+preflight unit working. CI builds and lints the variant on every pull
+request and push to `main` but does not publish it.
+
+Known gaps, as of bootc 1.17.1 (October 2026):
+
+- There is no in-place move from ostree; install fresh. Do not
+  `bootc switch` an ostree install to the composefs build.
+- rpm-ostree, and so GNOME Software's OS updates, do not work; use
+  `bootc upgrade` (`ujust update-and-reboot`). `bootc-fetch-apply-updates.timer` is
+  conditioned on `/run/ostree-booted` and never runs
+  ([bootc#2578](https://github.com/bootc-dev/bootc/issues/2578)).
+- With no separate `/boot` partition, systemd's GPT auto-generator mounts the
+  ESP on `/boot` while the BLS entries and GRUB configuration live in
+  `/sysroot/boot`, so `bootloader-update.service` (bootupd) fails on every
+  boot and the system shows as degraded. Upgrades and rollback are unaffected.
+- Upstream tests ext4 and XFS; btrfs, this image's default, is expected to
+  work and passed the VM test here.
+- No boot counting, logically bound images or `bootc edit`; see bootc's
+  [known issues](https://bootc-dev.github.io/bootc/bootc-composefs.7.html#known-issues).
+
+A derived image inherits the backend. If it changes bootc, it must also
+regenerate the initramfs, which carries bootc's mount code.
+
 ## Build and test
 
 ```sh

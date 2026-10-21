@@ -5,6 +5,11 @@ export PODMAN := env("PODMAN", "podman")
 export BCVK := env("BCVK", "bcvk")
 export BCVK_CONNECTION := env("BCVK_CONNECTION", "qemu:///session")
 
+# Read by build/15-bootc.sh: fedora, updates-testing or copr; ostree or composefs.
+
+export BOOTC_SOURCE := env("BOOTC_SOURCE", "fedora")
+export STORAGE_BACKEND := env("STORAGE_BACKEND", "ostree")
+
 # The forge's shared workflow check (cgwalters-forge/actions, lint/README.md):
 # actionlint, zizmor and the runner-label policy. FORGE_ACTIONS is a checkout
 # of that repository beside this one. CONTAINER=podman runs it without docker.
@@ -38,6 +43,8 @@ build tag=DEFAULT_TAG:
         --build-arg "IMAGE_NAME=${IMAGE_NAME}" \
         --build-arg "IMAGE_VENDOR=${IMAGE_VENDOR}" \
         --build-arg "UBLUE_IMAGE_TAG={{ tag }}" \
+        --build-arg "BOOTC_SOURCE=${BOOTC_SOURCE}" \
+        --build-arg "STORAGE_BACKEND=${STORAGE_BACKEND}" \
         --label "org.opencontainers.image.title=${IMAGE_NAME}" \
         --label "org.opencontainers.image.version=${version}" \
         --label "org.opencontainers.image.description=Generic Fedora Atomic bootc desktop/host base image" \
@@ -50,6 +57,11 @@ build tag=DEFAULT_TAG:
         --pull=newer \
         --tag "${IMAGE_NAME}:{{ tag }}" \
         .
+
+# Composefs-native variant; needs bootc 1.17 (updates-testing, or copr for main).
+[group('Image')]
+build-composefs tag="composefs" source="updates-testing":
+    BOOTC_SOURCE={{ source }} STORAGE_BACKEND=composefs {{ just_executable() }} --justfile "{{ justfile() }}" build {{ tag }}
 
 # ShellCheck over build scripts, host helpers and tests.
 [group('Quality')]
@@ -115,6 +127,11 @@ k3s-vm-create tag=DEFAULT_TAG:
 [group('Virtual Machine')]
 k3s-vm-test:
     {{ BCVK }} libvirt --connect {{ BCVK_CONNECTION }} ssh {{ k3s_vm_name }} 'set -eu; systemctl enable --now k3s.service; /usr/libexec/k3s-validate'
+
+# Install a composefs build in a disposable VM; check upgrade, switch, rollback.
+[group('Virtual Machine')]
+composefs-vm-test tag="composefs":
+    tests/composefs-vm-test.sh "{{ local_image }}:{{ tag }}"
 
 # Remove the k3s test VM.
 [group('Virtual Machine')]
