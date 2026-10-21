@@ -8,9 +8,13 @@ on:
 permissions:
   contents: read
 
+# A main run is not cancelled by the next push: it would otherwise lose its
+# VM tests and promotion, and `stable` could stall while commits keep
+# landing. Queued main runs wait, and `promote` skips any that is no longer
+# the head of main.
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   IMAGE_REGISTRY: ghcr.io/cgwalters-forge
@@ -31,13 +35,18 @@ jobs:
       - run: shellcheck build/*.sh custom/system/usr/libexec/k3s-* tests/*.sh tests/kubevirt/*.sh
 
   # Pull requests build and lint the image (the Containerfile ends with
-  # `bootc container lint`) and never push. Pushes to main also publish.
+  # `bootc container lint`) and never push. On main the image is pushed only
+  # as git-<sha>; `promote` moves the other tags once the VM tests pass.
   image:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
       contents: read
       packages: write
+    outputs:
+      image-id: ${{ steps.save.outputs.image-id }}
+      version: ${{ steps.save.outputs.version }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,27 +64,187 @@ jobs:
       - name: Build
         run: sudo -E "$(command -v just)" build "${DEFAULT_TAG}"
 
+      # The VM jobs test this archive, not a rebuild; they check that the
+      # image they load has this image ID (the digest of its config).
+      - name: Save the image for the VM tests
+        id: save
+        run: |
+          set -euo pipefail
+          local_ref="localhost/${IMAGE_NAME}:${DEFAULT_TAG}"
+          image_id="sha256:$(sudo podman image inspect "${local_ref}" --format '{{ .Id }}')"
+          version=$(sudo podman image inspect "${local_ref}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
+          sudo podman save "${local_ref}" | zstd -T0 -3 -q -o "${RUNNER_TEMP}/image.tar.zst"
+          ls -l "${RUNNER_TEMP}/image.tar.zst"
+          echo "image-id=${image_id}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image
+          path: ${{ runner.temp }}/image.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
       - name: Push
-        if: github.event_name != 'pull_request'
+        id: push
+        if: github.ref == 'refs/heads/main'
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           local_ref="localhost/${IMAGE_NAME}:${DEFAULT_TAG}"
-          version=$(sudo podman image inspect "${local_ref}" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
           remote="${IMAGE_REGISTRY}/${IMAGE_NAME}"
           printf '%s' "${REGISTRY_TOKEN}" | sudo podman login ghcr.io --username "${ACTOR}" --password-stdin
-          sudo podman push --digestfile digest "${local_ref}" "docker://${remote}:${version}"
-          for tag in "${DEFAULT_TAG}" "git-${GITHUB_SHA::12}"; do
-            sudo skopeo copy --all --preserve-digests "docker://${remote}@$(cat digest)" "docker://${remote}:${tag}"
-          done
+          sudo podman push --digestfile digest "${local_ref}" "docker://${remote}:git-${GITHUB_SHA::12}"
           sudo podman logout ghcr.io
+          echo "digest=$(cat digest)" >> "${GITHUB_OUTPUT}"
           {
             echo "## ${remote}"
             echo
             echo "Digest: \`$(cat digest)\`"
-            echo "Tags: \`${version}\`, \`${DEFAULT_TAG}\`, \`git-${GITHUB_SHA::12}\`"
+            echo "Tags: \`git-${GITHUB_SHA::12}\`; \`promote\` adds the others after the VM tests."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # Boots the image job's archive in VMs on a GitHub-hosted runner with KVM.
+  # vm-smoke is the stateless `just ephemeral-smoke`; vm-k3s installs the
+  # image into a libvirt VM, enables k3s and runs k3s-validate. KubeVirt
+  # (nested KVM inside that VM) is not run here.
+  vm:
+    name: vm-${{ matrix.suite }}
+    needs: image
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [smoke, k3s]
+    env:
+      # renovate: datasource=github-releases depName=bootc-dev/bcvk
+      BCVK_VERSION: 0.21.0
+      BCVK_SHA256: 3135cc59b8971193b49be6cbaee12b789391ac6e6ab5ed3edf17082b03f144dd
+      LIBVIRT_DEFAULT_URI: qemu:///session
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / "${RUNNER_TEMP}"
+
+      # The udev rule gives the runner user /dev/kvm. libvirt, OVMF and
+      # swtpm (bcvk gives libvirt VMs a TPM 2.0) are what `bcvk libvirt`
+      # needs; the AMD SEV firmware is excluded because libvirt would
+      # otherwise pick it for the UEFI guest.
+      - name: Install the virtualization stack and bcvk
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends just zstd podman qemu-system-x86 qemu-utils virtiofsd \
+            libvirt-daemon-system python3-virt-firmware genisoimage ovmf-generic ovmf-amdsev- swtpm swtpm-tools
+          tarball="${RUNNER_TEMP}/bcvk.tar.gz"
+          curl --fail --silent --show-error --location --retry 5 --output "${tarball}" \
+            "https://github.com/bootc-dev/bcvk/releases/download/v${BCVK_VERSION}/bcvk-x86_64-unknown-linux-gnu.tar.gz"
+          printf '%s  %s\n' "${BCVK_SHA256}" "${tarball}" | sha256sum --check --strict
+          tar -xzf "${tarball}" -C "${RUNNER_TEMP}" bcvk-x86_64-unknown-linux-gnu
+          sudo install -m 0755 "${RUNNER_TEMP}/bcvk-x86_64-unknown-linux-gnu" /usr/local/bin/bcvk
+          test -r /dev/kvm && test -w /dev/kvm
+          bcvk --version
+          podman --version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+          path: ${{ runner.temp }}
+
+      - name: Load the image
+        env:
+          IMAGE_ID: ${{ needs.image.outputs.image-id }}
+        run: |
+          set -euo pipefail
+          zstd -dc "${RUNNER_TEMP}/image.tar.zst" | podman load
+          rm -f "${RUNNER_TEMP}/image.tar.zst"
+          loaded="sha256:$(podman image inspect "localhost/${IMAGE_NAME}:${DEFAULT_TAG}" --format '{{ .Id }}')"
+          if [[ "${loaded}" != "${IMAGE_ID}" ]]; then
+            echo "::error::Loaded image ${loaded} is not the built image ${IMAGE_ID}"
+            exit 1
+          fi
+          df -h /
+
+      - name: Ephemeral smoke test
+        if: matrix.suite == 'smoke'
+        run: just ephemeral-smoke "${DEFAULT_TAG}"
+
+      # The install reads the image through virtiofsd under the libvirt
+      # session daemon this shell starts, and fails with "Too many open
+      # files" at the runner's default limit.
+      - name: k3s VM test
+        if: matrix.suite == 'k3s'
+        run: |
+          set -euo pipefail
+          sudo prlimit --pid "$$" --nofile=524288:524288
+          ulimit -n
+          just k3s-vm-create "${DEFAULT_TAG}"
+          just k3s-vm-test
+
+  # Moves the version tag and `stable` to the digest the VM jobs tested, by
+  # retagging it in the registry: nothing is rebuilt or re-uploaded. A
+  # failed VM job leaves `stable` where it was, and a re-run of an older
+  # main run does not move it back.
+  promote:
+    needs: [image, vm]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Retag the tested digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          IMAGE_ID: ${{ needs.image.outputs.image-id }}
+          VERSION: ${{ needs.image.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::Bad digest '${DIGEST}'"; exit 1; }
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]{8}$ ]] || { echo "::error::Bad version '${VERSION}'"; exit 1; }
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+          if [[ "${head}" != "${GITHUB_SHA}" ]]; then
+            echo "::notice::main is now ${head}; not promoting the build of ${GITHUB_SHA}."
+            exit 0
+          fi
+          command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo; }
+          remote="${IMAGE_REGISTRY}/${IMAGE_NAME}"
+          export REGISTRY_AUTH_FILE="${RUNNER_TEMP}/auth.json"
+          printf '%s' "${REGISTRY_TOKEN}" | skopeo login ghcr.io --username "${ACTOR}" --password-stdin
+          # The pushed manifest must carry the config the VM jobs loaded.
+          config=$(skopeo inspect --raw "docker://${remote}@${DIGEST}" | jq -r .config.digest)
+          if [[ "${config}" != "${IMAGE_ID}" ]]; then
+            echo "::error::${remote}@${DIGEST} has config ${config}, not the tested ${IMAGE_ID}"
+            exit 1
+          fi
+          # `stable` last: if a copy fails, a re-run of this job finishes it.
+          for tag in "${VERSION}" "${DEFAULT_TAG}"; do
+            skopeo copy --all --preserve-digests "docker://${remote}@${DIGEST}" "docker://${remote}:${tag}"
+            test "$(skopeo inspect --format '{{ .Digest }}' "docker://${remote}:${tag}")" = "${DIGEST}"
+          done
+          skopeo logout ghcr.io
+          {
+            echo "## ${remote}"
+            echo
+            echo "Promoted \`${DIGEST}\` to \`${VERSION}\` and \`${DEFAULT_TAG}\`."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       # TODO: sign the pushed digest with a cosign key pair (not keyless:

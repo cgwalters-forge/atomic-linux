@@ -11,8 +11,8 @@ tuning, extra packages) belongs in a small downstream image that starts
 
 It started as a [Universal Blue finpilot](https://github.com/projectbluefin/finpilot)
 image and keeps finpilot's multi-stage layout and examples. Status: early.
-The image builds and passes `bootc container lint`; `just ephemeral-smoke`
-and the k3s VM check pass in local VMs. The KubeVirt test passed on the
+The image builds and passes `bootc container lint`, and CI boots each
+build of it with `just ephemeral-smoke` and the k3s VM check. The KubeVirt test passed on the
 predecessor image but has not been rerun here, nothing has run on hardware,
 and images are not yet signed.
 
@@ -147,11 +147,21 @@ removes the VM it creates; `KEEP_FAILED_VM=1` keeps a failed one.
 ## Release
 
 [.github/workflows/build.yml](.github/workflows/build.yml) builds every pull
-request without pushing. A push to `main` builds and pushes to
-`ghcr.io/cgwalters-forge/atomic-linux` with the workflow's `GITHUB_TOKEN`
-(`packages: write`), tagged with the version label (`44.YYYYMMDD`),
-`stable` and `git-<sha>`; the job summary prints the digest. Dependabot
-proposes digest bumps for the `FROM` lines and action pins.
+request and boots the result in two VM jobs on a GitHub-hosted runner with
+KVM and a pinned bcvk: `vm-smoke` runs `just ephemeral-smoke`, and `vm-k3s`
+runs `just k3s-vm-create` and `just k3s-vm-test`. Both test the build job's
+saved image, checked by image ID, not a rebuild. KubeVirt (`just
+kubevirt-test`) needs nested KVM inside the test VM and is not run in CI.
+
+A push to `main` pushes the image to `ghcr.io/cgwalters-forge/atomic-linux`
+as `git-<sha>` only. Once both VM jobs pass, the `promote` job retags that
+digest as the version label (`44.YYYYMMDD`) and `stable`, after checking
+that its config is the image the VM jobs booted; nothing is rebuilt. A
+failed VM test leaves `stable` where it was, and `promote` skips a build
+that is no longer the head of `main`. The workflow's
+`GITHUB_TOKEN` (`packages: write`) is the only credential, and the job
+summaries print the digest. Dependabot proposes digest bumps for the `FROM`
+lines and action pins.
 
 Not yet done: signing. The plan is a cosign key pair, not keyless signing,
 because containers/image (and so bootc) cannot match keyless signatures to a
