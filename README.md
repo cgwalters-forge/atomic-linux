@@ -11,9 +11,10 @@ tuning, extra packages) belongs in a small downstream image that starts
 
 It started as a [Universal Blue finpilot](https://github.com/projectbluefin/finpilot)
 image and keeps finpilot's multi-stage layout and examples. Status: early.
-The image builds and passes `bootc container lint`; boot, k3s and KubeVirt
-checks have been run in local VMs, not on hardware, and images are not yet
-signed.
+The image builds and passes `bootc container lint`; `just ephemeral-smoke`
+and the k3s VM check pass in local VMs. The KubeVirt test passed on the
+predecessor image but has not been rerun here, nothing has run on hardware,
+and images are not yet signed.
 
 ## What is in the image
 
