@@ -1,7 +1,8 @@
-# The composefs-native variant (README, "composefs backend"): built and
-# linted on every pull request and push so it keeps working, never pushed.
-# Its bootc comes from updates-testing, so it can also fail on its own.
-# Separate from build.yml so neither workflow's changes touch the other.
+# The composefs-native variant (README, "composefs backend"): built,
+# linted and booted in VMs on every pull request and push so it keeps
+# working, never pushed. Its bootc comes from updates-testing, so it can also
+# fail on its own. Separate from build.yml so neither workflow's changes
+# touch the other, and so these VM jobs never gate `stable` promotion.
 name: composefs
 on:
   pull_request:
@@ -16,10 +17,16 @@ concurrency:
   group: composefs-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  IMAGE_NAME: atomic-linux
+  COMPOSEFS_TAG: composefs
+
 jobs:
   image-composefs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      image-id: ${{ steps.save.outputs.image-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,3 +42,106 @@ jobs:
 
       - name: Build
         run: sudo -E "$(command -v just)" build-composefs
+
+      # As in build.yml, the VM jobs test this archive and check its image ID.
+      - name: Save the image for the VM tests
+        id: save
+        run: |
+          set -euo pipefail
+          local_ref="localhost/${IMAGE_NAME}:${COMPOSEFS_TAG}"
+          image_id="sha256:$(sudo podman image inspect "${local_ref}" --format '{{ .Id }}')"
+          sudo podman save "${local_ref}" | zstd -T0 -3 -q -o "${RUNNER_TEMP}/image.tar.zst"
+          ls -l "${RUNNER_TEMP}/image.tar.zst"
+          echo "image-id=${image_id}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-composefs
+          path: ${{ runner.temp }}/image.tar.zst
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+  # Boots the composefs build in VMs, as build.yml's vm jobs do for the
+  # default one. `bcvk ephemeral` boots the image over virtiofs, not from an
+  # installed composefs root, so vm-composefs-smoke checks only that the
+  # image boots and its userspace works; vm-composefs-lifecycle installs it
+  # (`just composefs-vm-test`) and checks that the composefs backend is
+  # booted and that upgrade, switch and rollback work.
+  vm-composefs:
+    name: vm-composefs-${{ matrix.suite }}
+    needs: image-composefs
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [smoke, lifecycle]
+    env:
+      # renovate: datasource=github-releases depName=bootc-dev/bcvk
+      BCVK_VERSION: 0.21.0
+      BCVK_SHA256: 3135cc59b8971193b49be6cbaee12b789391ac6e6ab5ed3edf17082b03f144dd
+      LIBVIRT_DEFAULT_URI: qemu:///session
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / "${RUNNER_TEMP}"
+
+      # As in build.yml: /dev/kvm for the runner user, libvirt, OVMF and
+      # swtpm without the AMD SEV firmware, and a checksummed bcvk.
+      - name: Install the virtualization stack and bcvk
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends just zstd podman qemu-system-x86 qemu-utils virtiofsd \
+            libvirt-daemon-system python3-virt-firmware genisoimage ovmf-generic ovmf-amdsev- swtpm swtpm-tools
+          tarball="${RUNNER_TEMP}/bcvk.tar.gz"
+          curl --fail --silent --show-error --location --retry 5 --output "${tarball}" \
+            "https://github.com/bootc-dev/bcvk/releases/download/v${BCVK_VERSION}/bcvk-x86_64-unknown-linux-gnu.tar.gz"
+          printf '%s  %s\n' "${BCVK_SHA256}" "${tarball}" | sha256sum --check --strict
+          tar -xzf "${tarball}" -C "${RUNNER_TEMP}" bcvk-x86_64-unknown-linux-gnu
+          sudo install -m 0755 "${RUNNER_TEMP}/bcvk-x86_64-unknown-linux-gnu" /usr/local/bin/bcvk
+          test -r /dev/kvm && test -w /dev/kvm
+          bcvk --version
+          podman --version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-composefs
+          path: ${{ runner.temp }}
+
+      - name: Load the image
+        env:
+          IMAGE_ID: ${{ needs.image-composefs.outputs.image-id }}
+        run: |
+          set -euo pipefail
+          zstd -dc "${RUNNER_TEMP}/image.tar.zst" | podman load
+          rm -f "${RUNNER_TEMP}/image.tar.zst"
+          loaded="sha256:$(podman image inspect "localhost/${IMAGE_NAME}:${COMPOSEFS_TAG}" --format '{{ .Id }}')"
+          if [[ "${loaded}" != "${IMAGE_ID}" ]]; then
+            echo "::error::Loaded image ${loaded} is not the built image ${IMAGE_ID}"
+            exit 1
+          fi
+          df -h /
+
+      - name: Ephemeral smoke test
+        if: matrix.suite == 'smoke'
+        run: just ephemeral-smoke "${COMPOSEFS_TAG}"
+
+      # The install reads the image through virtiofsd and needs a higher
+      # open-file limit, as build.yml's k3s VM test does.
+      - name: Install, upgrade, switch and rollback
+        if: matrix.suite == 'lifecycle'
+        run: |
+          set -euo pipefail
+          sudo prlimit --pid "$$" --nofile=524288:524288
+          ulimit -n
+          just composefs-vm-test "${COMPOSEFS_TAG}"
