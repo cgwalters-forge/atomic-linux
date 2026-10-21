@@ -13,7 +13,8 @@ rules come from [cgwalters-forge/agenthome](https://github.com/cgwalters-forge/a
   no `Signed-off-by`, no model names. Imperative subjects, the reason in the
   body. One task, one pull request.
 - Never print or commit secrets. The build needs none; CI's only credential
-  is the workflow's `GITHUB_TOKEN`, used only by the push step on `main`.
+  is the workflow's `GITHUB_TOKEN`, used only by the push and promote
+  steps on `main`.
 - Explain changes to workflows, permissions, action pins and pushed tags in
   the pull request. Non-`cgwalters-forge` actions are pinned by commit.
 
@@ -24,7 +25,9 @@ rules come from [cgwalters-forge/agenthome](https://github.com/cgwalters-forge/a
 - `custom/system/`: files copied onto `/` by `build/10-build.sh`.
 - `custom/brew`, `custom/flatpaks`, `custom/ujust`: user-facing examples.
 - `tests/kubevirt/`: the nested-KVM acceptance fixture for `just kubevirt-test`.
-- `.github/workflows/build.yml`: lint, image build on PRs, push on `main`.
+- `.github/workflows/build.yml`: lint, image build, VM tests (`vm-smoke`,
+  `vm-k3s`) on PRs; on `main`, push as `git-<sha>` and promote that digest
+  to `stable` once the VM tests pass.
 - `.github/workflows/composefs.yml`: builds the composefs variant, never pushes.
 
 ## Build, lint and test
