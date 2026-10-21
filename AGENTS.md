@@ -25,6 +25,7 @@ rules come from [cgwalters-forge/agenthome](https://github.com/cgwalters-forge/a
 - `custom/brew`, `custom/flatpaks`, `custom/ujust`: user-facing examples.
 - `tests/kubevirt/`: the nested-KVM acceptance fixture for `just kubevirt-test`.
 - `.github/workflows/build.yml`: lint, image build on PRs, push on `main`.
+- `.github/workflows/composefs.yml`: builds the composefs variant, never pushes.
 
 ## Build, lint and test
 

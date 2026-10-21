@@ -10,6 +10,7 @@ Scripts are named with a number prefix (e.g., `10-build.sh`, `20-onepassword.sh`
 
 - **`00-image-info.sh`** - Writes `/usr/share/ublue-os/image-info.json`; installed as `/usr/libexec/atomic-linux/write-image-info` for derived images
 - **`10-build.sh`** - Main build script for base system modifications, package installation, and service configuration
+- **`15-bootc.sh`** - Optionally installs a newer bootc and makes the image composefs-native (`BOOTC_SOURCE`, `STORAGE_BACKEND`; see the top-level README)
 - **`20-k3s.sh`** - Installs a checksum-pinned k3s and k3s-selinux, left disabled
 - **`clean-stage.sh`** - Removes build leftovers so `bootc container lint` passes
 
