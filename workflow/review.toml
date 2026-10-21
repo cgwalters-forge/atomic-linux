@@ -4,7 +4,7 @@
 # A bot so listed must also be named in `bots`: these bounds check the
 # actor, the caller's `if:` the author.
 hosts = ["github.com"]
-repos = ["cgwalters-forge/atomic-linux"]
+repos = ["cgwalters-forge/atomic-linux-sandbox", "cgwalters-forge/atomic-linux"]
 bases = ["main"]
 max_outputs = 1
 max_patch_bytes = 1024
