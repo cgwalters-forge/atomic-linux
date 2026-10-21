@@ -111,7 +111,7 @@ vm-create tag=DEFAULT_TAG:
 # Check the persistent VM: identity, btrfs root, GDM, networking.
 [group('Virtual Machine')]
 vm-test tag=DEFAULT_TAG:
-    {{ BCVK }} libvirt --connect {{ BCVK_CONNECTION }} ssh {{ vm_name }} 'set -eu; test "$(jq -r .\"image-name\" /usr/share/ublue-os/image-info.json)" = {{ IMAGE_NAME }}; bootc status --format=json | jq -e ".status.booted.image.image.image == \"{{ local_image }}:{{ tag }}\""; test "$(findmnt -no FSTYPE /sysroot)" = btrfs; systemctl is-active NetworkManager; test "$(systemctl get-default)" = graphical.target; systemctl is-active gdm; getent hosts fedoraproject.org; curl --fail --silent --show-error --head https://fedoraproject.org'
+    {{ BCVK }} libvirt --connect {{ BCVK_CONNECTION }} ssh {{ vm_name }} 'set -eu; test "$(jq -r .\"image-name\" /usr/share/ublue-os/image-info.json)" = {{ IMAGE_NAME }}; bootc status --format=json | jq -e ".status.booted.image.image.image == \"{{ local_image }}:{{ tag }}\""; test "$(findmnt -no FSTYPE /sysroot)" = btrfs; systemctl is-active NetworkManager; test "$(systemctl get-default)" = graphical.target; systemctl is-active gdm; getent hosts fedoraproject.org; curl --silent --show-error --head --output /dev/null https://fedoraproject.org'
 
 # Remove the persistent VM.
 [group('Virtual Machine')]

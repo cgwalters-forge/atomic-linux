@@ -21,5 +21,7 @@ command -v tmux gum k3s
 test "$(systemctl is-enabled k3s.service || true)" = disabled
 systemctl is-active firewalld
 getent hosts fedoraproject.org
-curl --fail --silent --show-error --head https://fedoraproject.org >/dev/null
+# Any HTTP response proves DNS, routing and TLS; not --fail, since one of
+# fedoraproject.org's proxies intermittently answers 404.
+curl --silent --show-error --head https://fedoraproject.org >/dev/null
 echo "ephemeral smoke passed"
