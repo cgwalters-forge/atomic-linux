@@ -25,7 +25,7 @@ COPY --from=brew /system_files /oci/brew
 # Base image: Fedora's official Silverblue (GNOME) bootc image. Alternatives
 # with the same layout: quay.io/fedora-ostree-desktops/base-main (no desktop)
 # or quay.io/centos-bootc/centos-bootc:stream10.
-FROM quay.io/fedora-ostree-desktops/silverblue:44@sha256:0789a48f04bbd7308647879aa90155911822f879dae5d00b3eaa543c06e46d3e
+FROM quay.io/fedora-ostree-desktops/silverblue:44@sha256:6f18b1c32e1904c7019807ffbeb7cd066683d72b0504d046abcb07cbdf4c9fab
 
 # Image identity, recorded in /usr/share/ublue-os/image-info.json. Derived
 # images re-run /usr/libexec/atomic-linux/write-image-info with their own.
